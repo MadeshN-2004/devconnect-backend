@@ -1,86 +1,83 @@
-// backend/server.js (Updated)
-import express from "express";
-import mongoose from "mongoose";
-import cors from "cors";
-import dotenv from "dotenv";
-import cookieParser from "cookie-parser";
-import authRoutes from "./routes/authRoutes.js";
-import userRoutes from "./routes/userRoutes.js";
-import projectRoutes from "./routes/projectRoutes.js";
-import skillRoutes from "./routes/skillRoutes.js";
-import connectionRoutes from "./routes/connectionRoutes.js";
-import messages from "./routes/messages.js"
+import dotenv from 'dotenv';
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import mongoose from 'mongoose';
+import cors from 'cors';
+import cookieParser from 'cookie-parser';
+import authRoutes from './routes/authRoutes.js';
+import userRoutes from './routes/userRoutes.js';
+import projectRoutes from './routes/projectRoutes.js';
+import skillRoutes from './routes/skillRoutes.js';
+import connectionRoutes from './routes/connectionRoutes.js';
+import messageRoutes from './routes/messageRoutes.js';
+import authMiddleware from './middleware/authMiddleware.js';
 
 dotenv.config();
 
 const app = express();
+const server = http.createServer(app);
+
+// Socket.io setup
+const io = new Server(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    methods: ["GET", "POST"],
+    credentials: true
+  }
+});
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3001'], // Add your frontend URLs
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-auth-token']
+  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  credentials: true
 }));
-
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json());
 app.use(cookieParser());
 
-const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/devconnect';
-
 // Database connection
-mongoose.connect(MONGO_URI, {
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/devhub', {
   useNewUrlParser: true,
   useUnifiedTopology: true
 })
-.then(() => {
-  console.log("✅ MongoDB connected successfully");
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📱 Frontend should connect to: http://localhost:${PORT}`);
-  });
-})
-.catch((err) => {
-  console.error("❌ DB connection error:", err);
-  process.exit(1);
-});
+.then(() => console.log('Connected to MongoDB'))
+.catch(err => console.error('MongoDB connection error:', err));
+
+// Attach io to app for use in controllers
+app.set('io', io);
 
 // Routes
-app.use("/api/auth", authRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/projects", projectRoutes);
-app.use("/api/skills", skillRoutes);
-app.use("/api/connections", connectionRoutes);
-app.use("/api/messages", messages);
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/projects', projectRoutes);
+app.use('/api/skills', skillRoutes);
+app.use('/api/connections', connectionRoutes);
+app.use('/api/messages', messageRoutes);
+app.use(authMiddleware);
 
-// Health check route
-app.get('/api/health', (req, res) => {
-  res.json({
-    success: true,
-    message: 'DevConnect API is running',
-    timestamp: new Date().toISOString()
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log('New client connected:', socket.id);
+
+  // Join user's room for private messaging
+  socket.on('joinUserRoom', (userId) => {
+    socket.join(userId);
+    console.log(`User ${userId} joined their room`);
+    socket.broadcast.emit('userOnline', userId);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
   });
 });
 
-// Global error handler
-app.use((error, req, res, next) => {
-  console.error('Global Error Handler:', error);
-  
-  res.status(error.status || 500).json({
-    success: false,
-    message: error.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
-  });
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ message: 'Something broke!' });
 });
 
-// Handle 404
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: `Route ${req.originalUrl} not found`
-  });
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
-
-export default app;
